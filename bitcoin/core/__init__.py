@@ -252,21 +252,24 @@ class CTxOut(ImmutableSerializable):
     Contains the public key that the next input must be able to sign with to
     claim it.
     """
-    __slots__ = ['nValue', 'scriptPubKey']
+    __slots__ = ['nValue', 'scriptPubKey', 'nColor']
 
-    def __init__(self, nValue=-1, scriptPubKey=script.CScript()):
+    def __init__(self, nValue=-1, scriptPubKey=script.CScript(), nColor=0):
         object.__setattr__(self, 'nValue', int(nValue))
         object.__setattr__(self, 'scriptPubKey', scriptPubKey)
+        object.__setattr__(self, 'nColor', int(nColor))
 
     @classmethod
     def stream_deserialize(cls, f):
         nValue = struct.unpack(b"<q", ser_read(f,8))[0]
         scriptPubKey = script.CScript(BytesSerializer.stream_deserialize(f))
-        return cls(nValue, scriptPubKey)
+        nColor = struct.unpack(b"<I", ser_read(f,4))[0]
+        return cls(nValue, scriptPubKey, nColor)
 
     def stream_serialize(self, f):
         f.write(struct.pack(b"<q", self.nValue))
         BytesSerializer.stream_serialize(self.scriptPubKey, f)
+        f.write(struct.pack(b"<I", self.nColor))
 
     def is_valid(self):
         if not MoneyRange(self.nValue):
@@ -277,9 +280,9 @@ class CTxOut(ImmutableSerializable):
 
     def __repr__(self):
         if self.nValue >= 0:
-            return "CTxOut(%s*COIN, %r)" % (str_money_value(self.nValue), self.scriptPubKey)
+            return "CTxOut(%s*COIN, %r, %d)" % (str_money_value(self.nValue), self.scriptPubKey, self.nColor)
         else:
-            return "CTxOut(%d, %r)" % (self.nValue, self.scriptPubKey)
+            return "CTxOut(%d, %r, %d)" % (self.nValue, self.scriptPubKey, self.nColor)
 
     @classmethod
     def from_txout(cls, txout):
@@ -292,7 +295,7 @@ class CTxOut(ImmutableSerializable):
             return txout
 
         else:
-            return cls(txout.nValue, txout.scriptPubKey)
+            return cls(txout.nValue, txout.scriptPubKey, txout.nColor)
 
 @__make_mutable
 class CMutableTxOut(CTxOut):
@@ -302,13 +305,22 @@ class CMutableTxOut(CTxOut):
     @classmethod
     def from_txout(cls, txout):
         """Create a fullly mutable copy of an existing TxOut"""
-        return cls(txout.nValue, txout.scriptPubKey)
+        return cls(txout.nValue, txout.scriptPubKey, txout.nColor)
 
 class CTransaction(ImmutableSerializable):
     """A transaction"""
-    __slots__ = ['nVersion', 'vin', 'vout', 'nLockTime']
+    __slots__ = ['nVersion', 'vin', 'vout', 'nLockTime', 'nType']
 
-    def __init__(self, vin=(), vout=(), nLockTime=0, nVersion=1):
+    TYPE_NORMAL = 0
+    TYPE_MINT = 1
+    TYPE_LICENSE = 2
+    TYPE_VOTE = 3
+    TYPE_BANVOTE = 4
+    TYPE_ORDER = 5
+    TYPE_MATCH = 6
+    TYPE_CANCEL = 7
+
+    def __init__(self, vin=(), vout=(), nLockTime=0, nVersion=1, nType=TYPE_NORMAL):
         """Create a new transaction
 
         vin and vout are iterables of transaction inputs and outputs
@@ -322,6 +334,8 @@ class CTransaction(ImmutableSerializable):
         object.__setattr__(self, 'nVersion', nVersion)
         object.__setattr__(self, 'vin', tuple(CTxIn.from_txin(txin) for txin in vin))
         object.__setattr__(self, 'vout', tuple(CTxOut.from_txout(txout) for txout in vout))
+        object.__setattr__(self, 'vout', tuple(CTxOut.from_txout(txout) for txout in vout))
+        object.__setattr__(self, 'nType', nType)
 
     @classmethod
     def stream_deserialize(cls, f):
@@ -329,19 +343,21 @@ class CTransaction(ImmutableSerializable):
         vin = VectorSerializer.stream_deserialize(CTxIn, f)
         vout = VectorSerializer.stream_deserialize(CTxOut, f)
         nLockTime = struct.unpack(b"<I", ser_read(f,4))[0]
-        return cls(vin, vout, nLockTime, nVersion)
+        nType = struct.unpack(b"<I", ser_read(f,4))[0]
+        return cls(vin, vout, nLockTime, nVersion, nType)
 
     def stream_serialize(self, f):
         f.write(struct.pack(b"<i", self.nVersion))
         VectorSerializer.stream_serialize(CTxIn, self.vin, f)
         VectorSerializer.stream_serialize(CTxOut, self.vout, f)
         f.write(struct.pack(b"<I", self.nLockTime))
+        f.write(struct.pack(b"<I", self.nType))
 
     def is_coinbase(self):
         return len(self.vin) == 1 and self.vin[0].prevout.is_null()
 
     def __repr__(self):
-        return "CTransaction(%r, %r, %i, %i)" % (self.vin, self.vout, self.nLockTime, self.nVersion)
+        return "CTransaction(%r, %r, %i, %i, %i)" % (self.vin, self.vout, self.nLockTime, self.nVersion, self.nType)
 
     @classmethod
     def from_tx(cls, tx):
@@ -354,7 +370,7 @@ class CTransaction(ImmutableSerializable):
             return tx
 
         else:
-            return cls(tx.vin, tx.vout, tx.nLockTime, tx.nVersion)
+            return cls(tx.vin, tx.vout, tx.nLockTime, tx.nVersion, tx.nType)
 
 
 @__make_mutable
@@ -550,17 +566,19 @@ class CoreChainParams(object):
 class CoreMainParams(CoreChainParams):
     MAX_MONEY = 21000000 * COIN
     NAME = 'mainnet'
-    GENESIS_BLOCK = CBlock.deserialize(x('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a29ab5f49ffff001d1dac2b7c0101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000'))
+    GENESIS_BLOCK = CBlock.deserialize(x('01000000000000000000000000000000000000000000000000000000000000000000000078715bbd1d02af2c7b6f1bcfa1ea38fd9dc556d4d2b17a0994ba4ce53969c4e6f89cc054f0ff0f1eefcc0f000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2a04ffff001d0104224f70656e4e65742047436f696e2050726f6a65637420323031342e392047436f696effffffff010000000000000000434104a3a8584b519bb42f63defcdd1bec62e685d8204ebe83a02f80cae170c207934591a1e739bad2f5ed632844c636504d8587ecabaf0b3168afb4f613895fd1105aac000000000000000000000000'))
     SUBSIDY_HALVING_INTERVAL = 210000
     PROOF_OF_WORK_LIMIT = 2**256-1 >> 32
 
 class CoreTestNetParams(CoreMainParams):
     NAME = 'testnet'
-    GENESIS_BLOCK = CBlock.deserialize(x('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae180101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000'))
+    # We don't have test genesis block for now.
+    # GENESIS_BLOCK = CBlock.deserialize(x('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff001d1aa4ae180101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac0000000000'))
 
 class CoreRegTestParams(CoreTestNetParams):
     NAME = 'regtest'
-    GENESIS_BLOCK = CBlock.deserialize(x('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f20020000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000'))
+    # We don't have regtest genesis block for now.
+    # GENESIS_BLOCK = CBlock.deserialize(x('0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4adae5494dffff7f20020000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac0000000000'))
     SUBSIDY_HALVING_INTERVAL = 150
     PROOF_OF_WORK_LIMIT = 2**256-1 >> 1
 
