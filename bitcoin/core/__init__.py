@@ -25,6 +25,15 @@ COIN = 100000000
 MAX_BLOCK_SIZE = 1000000
 MAX_BLOCK_SIGOPS = MAX_BLOCK_SIZE/50
 
+TYPE_NORMAL = 0
+TYPE_MINT = 1
+TYPE_LICENSE = 2
+TYPE_VOTE = 3
+TYPE_BANVOTE = 4
+TYPE_ORDER = 5
+TYPE_MATCH = 6
+TYPE_CANCEL = 7
+
 def MoneyRange(nValue, params=None):
     global coreparams
     if not params:
@@ -311,15 +320,6 @@ class CTransaction(ImmutableSerializable):
     """A transaction"""
     __slots__ = ['nVersion', 'vin', 'vout', 'nLockTime', 'nType']
 
-    TYPE_NORMAL = 0
-    TYPE_MINT = 1
-    TYPE_LICENSE = 2
-    TYPE_VOTE = 3
-    TYPE_BANVOTE = 4
-    TYPE_ORDER = 5
-    TYPE_MATCH = 6
-    TYPE_CANCEL = 7
-
     def __init__(self, vin=(), vout=(), nLockTime=0, nVersion=1, nType=TYPE_NORMAL):
         """Create a new transaction
 
@@ -333,7 +333,6 @@ class CTransaction(ImmutableSerializable):
 
         object.__setattr__(self, 'nVersion', nVersion)
         object.__setattr__(self, 'vin', tuple(CTxIn.from_txin(txin) for txin in vin))
-        object.__setattr__(self, 'vout', tuple(CTxOut.from_txout(txout) for txout in vout))
         object.__setattr__(self, 'vout', tuple(CTxOut.from_txout(txout) for txout in vout))
         object.__setattr__(self, 'nType', nType)
 
@@ -378,7 +377,7 @@ class CMutableTransaction(CTransaction):
     """A mutable transaction"""
     __slots__ = []
 
-    def __init__(self, vin=None, vout=None, nLockTime=0, nVersion=1):
+    def __init__(self, vin=None, vout=None, nLockTime=0, nVersion=1, nType=TYPE_NORMAL):
         if not (0 <= nLockTime <= 0xffffffff):
             raise ValueError('CTransaction: nLockTime must be in range 0x0 to 0xffffffff; got %x' % nLockTime)
         self.nLockTime = nLockTime
@@ -391,6 +390,7 @@ class CMutableTransaction(CTransaction):
             vout = []
         self.vout = vout
         self.nVersion = nVersion
+        self.nType = nType
 
     @classmethod
     def from_tx(cls, tx):
@@ -398,7 +398,7 @@ class CMutableTransaction(CTransaction):
         vin = [CMutableTxIn.from_txin(txin) for txin in tx.vin]
         vout = [CMutableTxOut.from_txout(txout) for txout in tx.vout]
 
-        return cls(vin, vout, tx.nLockTime, tx.nVersion)
+        return cls(vin, vout, tx.nLockTime, tx.nVersion, tx.nType)
 
 
 
